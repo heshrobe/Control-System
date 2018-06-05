@@ -62,8 +62,8 @@
    (derivative :initform 0 :accessor derivative)
    ;; This is needed because it's accumulated over time
    (integral :initform 0 :accessor integral)
-   (kp :initarg :kp :accessor kp :initform 6.0)
-   (ki :initarg :ki :accessor ki :initform 3.0)
+   (kp :initarg :kp :accessor kp :initform 2.0)
+   (ki :initarg :ki :accessor ki :initform 0.1)
    (kd :initarg :kd :accessor kd :initform 0.01)
    (setpoint :initarg :setpoint :accessor setpoint :initform 10)
    (lower-limit :initarg :lower-limit :accessor lower-limit :initform nil)
@@ -99,14 +99,22 @@
 ;;; Also it's a function now so that I can wrap its internals
 (defun respond-to-sensor-value (controller last-control observation dt)
   (with-slots (signal-error integral kp ki kd setpoint upper-limit lower-limit kalman-filter) controller
-    (flet ((estimate-state (last-control observation) (estimate-state kalman-filter last-control observation))
-	   (compute-error (observation) (- observation setpoint))
+    (flet ((estimate-state (last-control observation) 
+	     (trace-format "~%Respond to sensor observation ~a last control ~a" observation last-control)
+	     (estimate-state kalman-filter last-control observation))
+	   (compute-error (state-estimate) (- state-estimate setpoint))
 	   (compute-new-derivative (new-signal-error) (derivative-slice signal-error dt))
-	   (compute-new-integral (new-signal-error) (integral-slice signal-error dt))
+	   (compute-new-integral (new-signal-error) 
+	     (trace-format "~%In simulator old-signal-error ~a new-signal-error ~a dt ~a" signal-error new-signal-error dt)
+	     (let ((answer (integral-slice signal-error dt)))
+	       (trace-format "~%In simulator integral is ~a" answer)
+	       answer))
 	   (accumulate-error (new-integral) (incf integral new-integral))
 	   (update-state (new-signal-error) (update-values signal-error))
 	   (compute-new-proportional-term (proportional) (* kp proportional))
-	   (compute-new-integral-term (integral) (* ki integral))
+	   (compute-new-integral-term (integral) 
+	     (trace-format "~%In simulator compute-new-integral-term integral is ~a" integral)
+	     (* ki integral))
 	   (compute-new-derivative-term (derivative) (* kd derivative))
 	   (compute-total-correction (p i d) (- (+ p i d)))
 	   (clip (value)
@@ -115,6 +123,7 @@
 	     value))
       (multiple-value-bind (estimated-state prior-state-estimate estimated-output residual) (estimate-state last-control observation)
 	(declare (ignore prior-state-estimate estimated-output))
+      (trace-format "~%Controller estimated state ~d" estimated-state)
 	(let* ((new-signal-error (compute-error estimated-state)))
 	  (let ((new-proportional new-signal-error)
 		(new-derivative (compute-new-derivative new-signal-error))
@@ -124,7 +133,7 @@
 		  (proportional controller) new-proportional)
 	    (update-state new-signal-error)
 	    (let ((prop-term (compute-new-proportional-term new-proportional))
-		  (int-term (compute-new-integral-term integral))
+		  (int-term (compute-new-integral-term new-integral))
 		  (deriv-term (compute-new-derivative-term new-derivative)))
 	      (let ((correction (compute-total-correction prop-term int-term deriv-term)))
 		(let ((clipped-correction (clip correction)))
@@ -169,7 +178,7 @@
 	 ;; (initial-alist (initialize plant initial-output))
 	 (signal-hacked nil))
     ;; provide the controller with its kalman-filter
-    ;; neee to catch this in the monitor
+    ;; Note: need to catch this in the monitor
     (setf (kalman-filter controller) (funcall (kalman-filter-constructor plant) plant dt))
     ;; Because this might depend on the kalman filter being initialized
     (setq signal-distorter (apply (first signal-distorter-form) (rest signal-distorter-form)))
@@ -214,7 +223,7 @@
 				       ;; and observe the sensor-value, error, and controller's command
 				       (observe error spoofed-sensor command residual)
 				       command)
-		  ;; do (format *error-output* "~%Actual plant output at time ~d is ~a" sim-time plant-output)
+		  ;; do (trace-format "~%Actual plant output at time ~d is ~a" sim-time plant-output)
 		  when display
 		  do (clim:draw-rectangle* pane 5 0 10 plant-output :ink +light-blue+)
 		     (sleep .1)
@@ -272,7 +281,7 @@
 	   observation))
     #'distorter))
 
-(defun make-a-fixed-offset-distorter (offset start-time stop-time &optional control-system)
+(defun make-a-fixed-offset-distorter (start-time stop-time offset &optional control-system)
   (declare (ignore control-system))
   (flet ((distorter (set-point observation command time) 
 	   (declare (ignore set-point command))
@@ -283,7 +292,7 @@
 	    ((> time stop-time) observation))))
     #'distorter))
 
-(defun make-a-setpoint-offset-distorter (offset start-time stop-time &optional control-system)
+(defun make-a-setpoint-offset-distorter (start-time stop-time offset &optional control-system)
   (declare (ignore control-system))
   (flet ((distorter (set-point observation command time) 
 	   (declare (ignore command))
@@ -388,9 +397,9 @@ let Y be the observed output
    ;; Area is the cross-sectional area of the tank in square feet
    (Area :accessor area :initarg :area :initform 10)
    ;; the proportionality constant for the pump in cu-ft/sec/volt (i.e. a 1 volt input causes the pump to move 1 cu-ft/sec
-   (pump-rate-scale :accessor pump-rate-scale :initarg :pump-rate-scale :initform 2)
+   (pump-rate-scale :accessor pump-rate-scale :initarg :pump-rate-scale :initform 10)
    ;; the proportionality constant for the drain-hole in cu-ft/sec/exp(ft,.5)
-   (drain-rate :accessor drain-rate :initarg :drain-rate :initform 2)
+   (drain-rate :accessor drain-rate :initarg :drain-rate :initform 1)
    ;; Now the state-variables
    ;; the height of the water in the tank
    (height :accessor height :initform 10 :initarg :height)
@@ -398,13 +407,14 @@ let Y be the observed output
    (volume :accessor volume)
    ;; the old pump rate
    (pump-rate :accessor pump-rate :initform 0)
-   (sensor-noise-sigma :accessor sensor-noise-sigma :initform 0.4 :Initarg :sensor-noise-sigmma)
-   (system-noise-sigma :accessor system-noise-sigma :initform 0.4 :initarg :system-noise-sigma)
+   (sensor-noise-sigma :accessor sensor-noise-sigma :initform 0.2 :Initarg :sensor-noise-sigmma)
+   (system-noise-sigma :accessor system-noise-sigma :initform 0.2 :initarg :system-noise-sigma)
    (simulation-frame :accessor simulation-frame :initarg :simulation-frame)
    ))
 
 (defmethod reset ((tank water-tank-plant-model))
-  (setf (height tank) (initial-tank-height (simulation-frame tank)))
+  (setf (height tank) (initial-tank-height (simulation-frame tank))
+	(pump-rate tank) 0)  
   )
 
 (defmethod kalman-filter-constructor ((tank water-tank-plant-model))
@@ -432,30 +442,37 @@ let Y be the observed output
   (with-slots (height drain-rate volume area) tank
     ;; notice this is using only the old value since we're calculating 
     ;; the new value using this 
-    (let* ((current-drain-rate (* (sqrt height) drain-rate))
+    (let* ((current-drain-rate (* (If (minusp height) 0 (sqrt height)) drain-rate))
 	   (drain-volume-increment (* current-drain-rate dt)))
       drain-volume-increment
       )))
 
 (defmethod respond-to-command ((tank water-tank-plant-model) control dt)
   (with-slots (height pump-rate pump-rate-scale drain-rate volume area) tank
-    ;; (format *error-output* "~%Plant responding to command ~a, current height ~a pump rate ~a" control height pump-rate)
     (let* ((new-pump-rate (* pump-rate-scale control))
 	   (pump-volume-increment (integral-slice pump-rate dt))
 	   ;; notice this is using only the old value since we're calculating
 	   ;; the new value using this
-	   (current-drain-rate (* (sqrt height) drain-rate))
+	   (current-drain-rate (if (minusp height) 0 (* (sqrt height) drain-rate)))
 	   (drain-volume-increment (* current-drain-rate dt))
 	   (volume-delta (- pump-volume-increment drain-volume-increment))
-	   (new-volume (+ volume volume-delta))
-	   (new-height (max 0 (+ (randist:random-normal 0 (system-noise-sigma tank)) (/ new-volume area)))))
+	   (plant-random (randist:random-normal 0 (system-noise-sigma tank)))
+	   (random-volume-addition (* plant-random area))
+	   (new-volume (+ volume volume-delta random-volume-addition))
+	   (new-height (max 0 (/ new-volume area))))
+      ;; (format *error-output* :"~%Plant random ~a" plant-random)
+      (trace-format "~%Real Plant responding to command ~a, old-height ~a, new height ~a old-pump rate ~a pump rate ~a" 
+		    control height new-height pump-rate new-pump-rate)
       (update-values height volume pump-rate)
       ;; return an alist of interesting values
-      (let ((noisy-height (+ height (randist:random-normal 0 (sensor-noise-sigma tank)))))
+      (let* ((sensor-random (randist:random-normal 0 (system-noise-sigma tank)))
+	     (noisy-height (+ height sensor-random)))
+	;; (format *error-output* :"~%Sensor random ~a" sensor-random)
+	(trace-format "~%Sensed height ~a" noisy-height)
 	`((height ,height) 
-	  (sensor-value , noisy-height)
+	  (sensor-value ,noisy-height)
 	  (volume ,volume) (pump-rate ,pump-rate) (drain-rate ,current-drain-rate)
-	  (pump-volume-increment , pump-volume-increment)
+	  (pump-volume-increment ,pump-volume-increment)
 	  (pump-rate-scale ,pump-rate-scale)))
       )))
 
@@ -554,19 +571,21 @@ let Y be the observed output
 
 ;;; Note: Height here is the previous state estimate from the filter not the height from the tank.
 (defmethod prior-state-estimate ((filter water-tank-kalman-filter) control)
-  (with-slots (pump-rate pump-rate-scale drain-rate area  (height previous-state) dt) filter
-    ;; (format *error-output* "~%KF prediction given command ~a, current height ~a pump rate ~a" control height pump-rate)
+  (with-slots (pump-rate pump-rate-scale drain-rate area (height previous-state) dt) filter
     (let* ((volume (* area height))
 	   (new-pump-rate (* pump-rate-scale control))
 	   (pump-volume-increment (integral-slice pump-rate dt))
 	   ;; notice this is using only the old value since we're calculating
 	   ;; the new value using this
-	   (current-drain-rate (* (sqrt height) drain-rate))
+	   (current-drain-rate (if (minusp height) 0 (* (sqrt height) drain-rate)))
 	   (drain-volume-increment (* current-drain-rate dt))
 	   (volume-delta (- pump-volume-increment drain-volume-increment))
 	   (new-volume (+ volume volume-delta))
 	   (new-height (max 0 (/ new-volume area))))
-      ;; (format *error-output* "~%~a ~a ~a ~a ~a" height pump-volume-increment drain-volume-increment volume-delta new-height)
+      (trace-format "~%KF prediction given command ~a, current height ~a old pump rate ~a pump rate ~a" 
+		    control height pump-rate new-pump-rate)
+      (trace-format "~%KF Prior state estimated height ~a given ~a ~a ~a ~a"
+		    height pump-volume-increment drain-volume-increment volume-delta new-height)
       (update-values pump-rate)
       new-height
       )))
@@ -577,29 +596,49 @@ let Y be the observed output
 ;;; notice that this doesn't depend on the control input term
 ;;; That's because it's independent of height, so it doesn't contribute
 ;;; to the variance of the new-height.
+;;; Note: If the height is 0 or minus this blows up
 
 (defmethod prior-variance-estimate ((filter water-tank-kalman-filter))
-  (with-slots (dt (Q observation-variance) previous-variance (height previous-state) drain-rate) filter
-    (let ((derivative (1- (/ (* drain-rate dt) (* 2 (sqrt height))))))
-      (+ (* derivative derivative previous-variance) Q))))
+  (with-slots (dt (a system-gain) (Q system-variance) (previous-variance-estimate previous-variance) (height previous-state) drain-rate) filter
+    (let* ((derivative (1- (/ (* drain-rate dt) (* 2 (sqrt height)))))
+	   (estimate (+ (* derivative derivative previous-variance-estimate) Q)))
+      (values estimate
+	      ;; this is what you'd calculate for a normal kalman filter
+	      ;; I just included it here to see the difference
+	      ;; (+ (* a a previous-variance-estimate) Q)
+	      ))))
 
-;;; the requirement is that residual^2/sigma-r^2 < threshold
-;;; so residual = sqrt(threhold * sigma-r^ 2)
+;;; The requirement is that residual^2/sigma-r^2 < threshold.
+;;; But Calculate-sigma-r returns not a standard deviation but the variance
+;;; I.e. Sigma-r^2.
+;;; residual^2 < sigma-r * threshold
+;;; residual < sqrt (sigma-r * threshold)
+;;; Note: double check all this
 (defmethod calculate-max-residual ((filter water-tank-kalman-filter) threshold)
   (let ((sigma-r (calculate-sigma-r filter)))
-    (sqrt (* threshold (* sigma-r sigma-r)))
+    (sqrt (* sigma-r threshold))
   ))
 
-(defmethod calculate-sigma-r ((filter water-tank-kalman-filter))
-  (with-slots ((R system-variance)) filter
+(defmethod calculate-current-sigma-r ((filter water-tank-kalman-filter) prior-variance-estimate)
+  (with-slots ((R observation-variance) (h observation-gain)) filter
+    (let ((sigma-p prior-variance-estimate))
+      (+ (* h h sigma-p) R))))
+
+(defmethod calculate-steady-state-sigma-r ((filter water-tank-kalman-filter))
+  (with-slots ((R observation-variance) (h observation-gain)) filter
     (let ((sigma-p (steady-state-kalman-sigma filter)))
-      (+ sigma-p R))))
+      (+ (* h h sigma-p) R))))
 
 ;;; Note: If I got this right, then Q needs to be at least 4 times R.
 (defmethod steady-state-kalman-sigma ((filter water-tank-kalman-filter))
-  (with-slots ((Q observation-variance) (R system-variance)) filter
+  (with-slots ((R observation-variance) (Q system-variance) ) filter
     (/ (+ Q (sqrt (+ (* Q Q) (* 4 Q R))))
        2)))
+
+(defmethod check-residual ((filter water-tank-kalman-filter) residual threshold)
+  (let* ((sigma-r (calculate-sigma-r filter))
+	 (ratio (/ (* residual residual) sigma-r)))
+    (> ratio threshold)))
 		  
 
 
@@ -627,7 +666,7 @@ let Y be the observed output
    (signal-names :initform '(height sensor-value) :accessor signal-names)
    (plot-data :initform nil :accessor plot-data)
    (initial-tank-height :initform 10 :accessor initial-tank-height)
-   (simulation-time :initform 20 :accessor simulation-time)
+   (simulation-time :initform 40 :accessor simulation-time)
    (delta-time :initform .5 :accessor delta-time)
    (signal-distorter :initform nil :accessor signal-distorter)
    (controller-hacker :initform (list nil 0 0) :accessor controller-hacker)
@@ -868,47 +907,47 @@ let Y be the observed output
       (identity 
        (setf (signal-distorter frame) `((identity) (make-an-identity-distorter))))
       (setpoint-offset
-       (let ((offset (if (eql current-distorter-type 'setpoint-offset)
-			 (second current-distorter-description)
-		       (default-parameters 'setpoint-offset-distorter)))
-	     (start-time 0)
-	     (end-time 20))
-	 (setq start-time (clim:accept 'number
-				       :stream stream
-				       :prompt "Time to start distortion"
-				       :default start-time))
-	 (terpri stream)
-	 (setq end-time (clim:accept 'number
-				     :stream stream
-				     :prompt "Time to stop increasing offset"
-				     :default end-time))
-	 (terpri stream)
-	 (setq offset (clim:accept 'number
-				   :stream stream
-				   :prompt "Amount of distortion"
-				   :default offset))
-	 (setf (signal-distorter frame) `((setpoint-offset ,offset) (make-a-setpoint-offset-distorter ,offset ,start-time ,end-time)))))
-      (fixed-offset 
-       (let ((offset (if (eql current-distorter-type 'fixed-offset)
-			 (second current-distorter-description)
-		       (default-parameters 'fixed-offset-distorter)))
-	     (start-time 0)
-	     (end-time 20))
-	 (setq start-time (clim:accept 'number
-				       :stream stream
-				       :prompt "Time to start distortion"
-				       :default start-time))
-	 (terpri stream)
-	 (setq end-time (clim:accept 'number
-				     :stream stream
-				     :prompt "Time to stop increasing offset"
-				     :default end-time))
-	 (terpri stream)
-	 (setq offset (clim:accept 'number
-				   :stream stream
-				   :prompt "Amount of distortion"
-				   :default offset))
-	 (setf (signal-distorter frame) `((fixed-offset ,offset) (make-a-fixed-offset-distorter ,offset ,start-time ,end-time)))))
+	  (let ((parameters (if (eql current-distorter-type 'setpoint-offset)
+				(rest current-distorter-description)
+			      (default-parameters 'setpoint-offset-distorter))))
+	    (destructuring-bind (start-time end-time max-distortion) parameters
+	      (setq start-time (clim:accept 'number
+					    :stream stream
+					    :prompt "Time to start distortion"
+					    :default start-time))
+	      (terpri stream)
+	      (setq end-time (clim:accept 'number
+					  :stream stream
+					  :prompt "Time to stop increasing offset"
+					  :default end-time))
+	      (terpri stream)
+	      (setq max-distortion (clim:accept 'number
+						:stream stream
+						:prompt "Maximum amount of distortion"
+						:default max-distortion))
+	      (setf (signal-distorter frame) `((setpoint-offset ,start-time ,end-time ,max-distortion)
+					       (make-a-setpoint-offset-distorter ,start-time ,end-time ,max-distortion))))))
+      (fixed-offset
+	  (let ((parameters (if (eql current-distorter-type 'fixed-offset)
+				(rest current-distorter-description)
+			      (default-parameters 'fixed-offset-distorter))))
+	    (destructuring-bind (start-time end-time max-distortion) parameters
+	      (setq start-time (clim:accept 'number
+					    :stream stream
+					    :prompt "Time to start distortion"
+					    :default start-time))
+	      (terpri stream)
+	      (setq end-time (clim:accept 'number
+					  :stream stream
+					  :prompt "Time to stop increasing offset"
+					  :default end-time))
+	      (terpri stream)
+	      (setq max-distortion (clim:accept 'number
+						:stream stream
+						:prompt "Maximum amount of distortion"
+						:default max-distortion))
+	      (setf (signal-distorter frame) `((fixed-offset ,start-time ,end-time ,max-distortion)
+					       (make-a-fixed-offset-distorter ,start-time ,end-time ,max-distortion))))))
       (increasing-offset
 	  (let ((parameters (if (eql current-distorter-type 'increasing-offset)
 				(rest current-distorter-description)
@@ -929,7 +968,7 @@ let Y be the observed output
 						:prompt "Maximum amount of distortion"
 						:default max-distortion))
 	      (setf (signal-distorter frame) `((increasing-offset ,start-time ,end-time ,max-distortion)
-					       ,(make-an-increasing-offset-distorter start-time end-time max-distortion))))))
+					       (make-an-increasing-offset-distorter ,start-time ,end-time ,max-distortion))))))
       (stepped-percent
        (let ((parameters (if (eql current-distorter-type 'stepped-percent)
 			     (rest current-distorter-description)
@@ -972,8 +1011,8 @@ let Y be the observed output
 					    (make-an-optimal-kalman-distorter ,threshold ,direction ,clim:*application-frame*))))))
       )))
 
-(defmethod default-parameters ((type (eql 'setpoint-offset-distorter))) 2)
-(defmethod default-parameters ((type (eql 'fixed-offset-distorter))) 2)
+(defmethod default-parameters ((type (eql 'setpoint-offset-distorter))) '(0 20 2))
+(defmethod default-parameters ((type (eql 'fixed-offset-distorter))) '(0 20 2))
 (defmethod default-parameters ((type (eql 'stepped-percent-distorter))) `(0.2 0.02 10))
 (defmethod default-parameters ((type (eql 'increasing-offset-distorter))) '(3 10 4))
 (defmethod default-parameters ((type (eql 'optimal-distorter))) '(1.5 down))
@@ -1068,16 +1107,17 @@ let Y be the observed output
 (defmethod simulate ((frame control-system))
   (with-slots (plant controller simulation-time delta-time signal-distorter signal-names plant-output-name plot-data awdrat-enabled? display-enabled?) frame
     (save-pid controller)
-    (setq plot-data
-      (do-a-simulation plant controller
-		       simulation-time delta-time
-		       signal-distorter
-		       (signals-of-interest plant)
-		       plant-output-name
-		       :display display-enabled?
-		       ))
-    ;; Reset the control system parameters after the simulation, the attacker might have munged them
-    (restore-pid controller)
+    (unwind-protect 
+	(setq plot-data
+	  (do-a-simulation plant controller
+			   simulation-time delta-time
+			   signal-distorter
+			   (signals-of-interest plant)
+			   plant-output-name
+			   :display display-enabled?
+			   ))
+      ;; Reset the control system parameters after the simulation, the attacker might have munged them
+      (restore-pid controller))
     (setf (x-value-increment frame) delta-time)
     ;; Pre-compute the x and y scale
     (when display-enabled?
@@ -1089,13 +1129,13 @@ let Y be the observed output
 	     (signal-names-width (loop for name in (if awdrat-enabled? (cons (predicted-signal-name frame) all-plotted-signals) all-plotted-signals)
 				     maximize (multiple-value-bind (width height) (clim:text-size graph-pane (string name))
 						(declare (ignore height))
-						;; (format *error-output* "~%string ~a width ~a" (string name) width)
+						;; (trace-format "~%string ~a width ~a" (string name) width)
 						(+ width 40))))
 	     (next-grid-after-simulated-time (max 1 (* (ceiling (* delta-time (length (second (first plot-data)))) (x-grid-increment frame))
 						       (x-grid-increment frame))))
 	     (min-y nil)
 	     (max-y nil))
-	;; (format *error-output* "~%Width ~a Names width ~a" width signal-names-width)
+	;; (trace-format "~%Width ~a Names width ~a" width signal-names-width)
 	(loop for (name data) in plot-data
 	    when (member name all-plotted-signals)
 	    do (loop for value across data
@@ -1108,7 +1148,7 @@ let Y be the observed output
 	;; The value in x-scale below is the "left-margin" in the plot code in setting up its transform
 	(let ((x-scale (/ (float (- width signal-names-width 40)) next-grid-after-simulated-time))
 	      (y-scale (/ (float (- height 100)) (- max-y min-y))))
-	  ;; (format *error-output* "~%Scaled last-grid ~a ~a" (* x-scale next-grid-after-simulated-time) x-scale)
+	  ;; (trace-format "~%Scaled last-grid ~a ~a" (* x-scale next-grid-after-simulated-time) x-scale)
 	  (setf (x-scale frame) x-scale
 		(y-scale frame) y-scale))))
     ))
