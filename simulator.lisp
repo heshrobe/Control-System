@@ -460,14 +460,14 @@ let Y be the observed output
 	   (random-volume-addition (* plant-random area))
 	   (new-volume (+ volume volume-delta random-volume-addition))
 	   (new-height (max 0 (/ new-volume area))))
-      ;; (format *error-output* :"~%Plant random ~a" plant-random)
-      (trace-format "~%Real Plant responding to command ~a, old-height ~a, new height ~a old-pump rate ~a pump rate ~a" 
+      (trace-format "~2%Real Plant responding to command ~a, old-height ~a, new height ~a old-pump rate ~a pump rate ~a" 
 		    control height new-height pump-rate new-pump-rate)
+      (trace-format"~%Plant random ~a" plant-random)
       (update-values height volume pump-rate)
       ;; return an alist of interesting values
       (let* ((sensor-random (randist:random-normal 0 (system-noise-sigma tank)))
 	     (noisy-height (+ height sensor-random)))
-	;; (format *error-output* :"~%Sensor random ~a" sensor-random)
+	(trace-format"~%Sensor random ~a" sensor-random)
 	(trace-format "~%Sensed height ~a" noisy-height)
 	`((height ,height) 
 	  (sensor-value ,noisy-height)
@@ -615,7 +615,7 @@ let Y be the observed output
 ;;; residual < sqrt (sigma-r * threshold)
 ;;; Note: double check all this
 (defmethod calculate-max-residual ((filter water-tank-kalman-filter) threshold)
-  (let ((sigma-r (calculate-sigma-r filter)))
+  (let ((sigma-r (calculate-steady-state-sigma-r filter)))
     (sqrt (* sigma-r threshold))
   ))
 
@@ -636,7 +636,7 @@ let Y be the observed output
        2)))
 
 (defmethod check-residual ((filter water-tank-kalman-filter) residual threshold)
-  (let* ((sigma-r (calculate-sigma-r filter))
+  (let* ((sigma-r (calculate-steady-state-sigma-r filter))
 	 (ratio (/ (* residual residual) sigma-r)))
     (> ratio threshold)))
 		  

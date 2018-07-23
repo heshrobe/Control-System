@@ -77,9 +77,10 @@ p-posterior-estimate(t) = p-prior-estimate * (1 - hk(t))
 (defmethod estimate-state ((kf core-scalar-kalman-filter) control-input observation)
   (with-slots ((h observation-gain) (R observation-variance)) kf
     (multiple-value-bind (prior-state-estimate prior-variance-estimate estimated-output) (predictor kf control-input)
-      (multiple-value-bind (posterior-state-estimate posterior-variance-estimate residual) (corrector kf observation prior-state-estimate prior-variance-estimate)
+      (multiple-value-bind (posterior-state-estimate posterior-variance-estimate residual) 
+	  (corrector kf observation prior-state-estimate prior-variance-estimate)
 	(let ((sigma-r (calculate-current-sigma-r kf prior-variance-estimate)))
-	  ;; (format *error-output* "~%Sigma-r ~a ~a" sigma-r (sqrt sigma-r))
+	  (trace-format "~%Sigma-r ~a ~a" sigma-r (sqrt sigma-r))
 	  (setf (previous-state kf) posterior-state-estimate
 		(previous-variance kf) posterior-variance-estimate)
 	  (trace-format "~%r^2 ~a sigma-r ~a bad ~a" (* residual residual) sigma-r (> (/ (* residual residual) sigma-r) 2))
@@ -118,6 +119,22 @@ p-posterior-estimate(t) = p-prior-estimate * (1 - hk(t))
 ;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+#|
+(2) Corrector: 
+
+calculate the predicted output estimated-z(t): h * x-prior-estimate(t) 
+
+Calculate the residual r: z(t) -  estimated-z(t)
+
+Calculate the kalman gain k(t):      h * prior-variance-estimate(t)
+                                     ---------------------------
+                                   h^2 * prior-variance-estimate(t) + r(t)
+
+x-posterior-estimate(t) = x-prior-estimate(t) + k * (z(t) - h * x-prior-estimate(t))
+p-posterior-estimate(t) = p-prior-estimate * (1 - hk(t))
+
+|#
+
 (defmethod corrector ((kf core-scalar-kalman-filter) observed-output prior-state-estimate prior-variance-estimate)
   (with-slots ((h system-gain) (R observation-variance)) kf
     (let* ((estimated-output (estimated-output kf prior-state-estimate))
@@ -129,9 +146,9 @@ p-posterior-estimate(t) = p-prior-estimate * (1 - hk(t))
 	      (posterior-variance-estimate kf prior-variance-estimate kalman-gain)
 	      residual))))
 
-(defmethod estimated-output ((kf core-scalar-kalman-filter) state-estimate) 
+(defmethod estimated-output ((kf core-scalar-kalman-filter) prior-state-estimate) 
   (with-slots ((h observation-gain)) kf
-      (* state-estimate h)))
+      (* h prior-state-estimate)))
 
 (defmethod residual ((kf core-scalar-kalman-filter) estimated-output observed-output) (- observed-output estimated-output))
 
