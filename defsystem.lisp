@@ -29,6 +29,7 @@
       (with-open-file (F #P"controls:home;my-logical-pathnames.lisp" 
 		       :direction :output
 		       :if-does-not-exist :create
+
 		       :if-exists :supersede)
 	(format f "~%;;; controls")
 	(format f "~2%~s" "controls")
@@ -48,6 +49,7 @@
     (:default-pathname "controls:code;"
 	:default-module-class separate-destination-module)
   (:serial
+   ("trace-format" (:module-class separate-destination-module))
    ("plot" (:module-class separate-destination-module))
    ("kalman" (:module-class separate-destination-module))
    ("simulator" (:module-class separate-destination-module))

@@ -600,7 +600,7 @@ let Y be the observed output
 
 (defmethod prior-variance-estimate ((filter water-tank-kalman-filter))
   (with-slots (dt (a system-gain) (Q system-variance) (previous-variance-estimate previous-variance) (height previous-state) drain-rate) filter
-    (let* ((derivative (1- (/ (* drain-rate dt) (* 2 (sqrt height)))))
+    (let* ((derivative (1- (/ (* drain-rate dt) (* 2 (max .001 (sqrt height))))))
 	   (estimate (+ (* derivative derivative previous-variance-estimate) Q)))
       (values estimate
 	      ;; this is what you'd calculate for a normal kalman filter
