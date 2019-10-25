@@ -675,6 +675,7 @@ let Y be the observed output
    (awdrat-information :accessor awdrat-information :initform nil)
    (awdrat-enabled? :accessor awdrat-enabled? :initform nil)
    (display-enabled? :accessor display-enabled? :Initform t)
+   (clear-screen? :accessor clear-screen? :initform nil)
    )
   (:top-level (control-system-top-level))
   (:command-table (control-system :inherit-from (clim:accept-values-pane)))
@@ -771,32 +772,34 @@ let Y be the observed output
    (t (write-string "No monitoring" stream))))
 
 (defmethod display-tank ((frame control-system) stream)
-  (with-slots (plot-data x-grid-increment y-grid-increment x-scale y-scale x-value-increment colors signal-names awdrat-enabled? awdrat-information display-enabled?
-	       signal-distorter) 
-      frame
-    (when (and plot-data display-enabled?)
-      (let* ((all-signal-names (union signal-names (if (eql (first (first signal-distorter)) 'identity)
-							'(error residual command)
-							'(spoofed-sensor residual error command))))
-	     (Plot-data (loop for name in all-signal-names 
-			    for data = (second (assoc name plot-data))
-			    collect data)))
-	(when (and awdrat-information awdrat-enabled?)
-	  (let ((predicted-values (predicted-sensor-sequence (awdrat-information frame)))
-		(predicted-signal-name (predicted-signal-name frame)))
-	    (push predicted-values plot-data)
-	    (push predicted-signal-name all-signal-names)))
-	(plot plot-data
-	      :stream stream
-	      :x-grid-increment x-grid-increment 
-	      :y-grid-increment y-grid-increment
-	      :x-scale x-scale
-	      :y-scale y-scale
-	      :x-value-increment x-value-increment
-	      :colors colors
-	      :parameter-names all-signal-names
-	      :error-information (when (and awdrat-enabled? awdrat-information) (error-detected awdrat-information))
-	      ))))
+  (if (clear-screen? frame)
+      (clim:window-clear stream)
+    (with-slots (plot-data x-grid-increment y-grid-increment x-scale y-scale x-value-increment colors signal-names awdrat-enabled? awdrat-information display-enabled?
+		 signal-distorter) 
+	frame
+      (when (and plot-data display-enabled?)
+	(let* ((all-signal-names (union signal-names (if (eql (first (first signal-distorter)) 'identity)
+							 '(error residual command)
+						       '(spoofed-sensor residual error command))))
+	       (Plot-data (loop for name in all-signal-names 
+			      for data = (second (assoc name plot-data))
+			      collect data)))
+	  (when (and awdrat-information awdrat-enabled?)
+	    (let ((predicted-values (predicted-sensor-sequence (awdrat-information frame)))
+		  (predicted-signal-name (predicted-signal-name frame)))
+	      (push predicted-values plot-data)
+	      (push predicted-signal-name all-signal-names)))
+	  (plot plot-data
+		:stream stream
+		:x-grid-increment x-grid-increment 
+		:y-grid-increment y-grid-increment
+		:x-scale x-scale
+		:y-scale y-scale
+		:x-value-increment x-value-increment
+		:colors colors
+		:parameter-names all-signal-names
+		:error-information (when (and awdrat-enabled? awdrat-information) (error-detected awdrat-information))
+		)))))
   (values))
 
 
@@ -1155,6 +1158,7 @@ let Y be the observed output
 
 (define-control-system-command (com-simulate :menu t :name t)
     (&key (Initial-value 'number))
+  (setf (clear-screen? clim:*application-frame*) nil)
   (when initial-value
     (let* ((plant (plant clim:*application-frame*))
 	   (output-name (plant-state-name plant)))
@@ -1177,4 +1181,9 @@ let Y be the observed output
 (define-control-system-command (com-enable-display :name t :menu t)
     ((enabled? 'boolean :default nil :prompt "Enable Interactive Display"))
   (setf (display-enabled? clim:*application-frame*) enabled?)
+  )
+
+(define-control-system-command (com-clear-screen :name t :menu t)
+    ()
+  (setf (clear-screen? clim:*application-frame*) t)
   )
