@@ -10,7 +10,7 @@
 	     (colors (make-list (length values-arrays) :initial-element clim:+black+))
 	     parameter-names
 	     (label :None)
-	     ;; this is how much of a time-interval is represented by each 
+	     ;; this is how much of a time-interval is represented by each
 	     ;; slot of the values-array
 	     (x-value-increment (/ 1.0 50.0))
 	     (x-scale 1)
@@ -26,7 +26,7 @@
   (let ((min-x 0)
 	(max-x (* (reduce #'max values-arrays :key #'length) x-value-increment))
 	(min-y nil)
-	(max-y nil))
+	(max-y nil))2
     (loop for array in values-arrays
 	for this-min = (if (= (length array) 0) 0 (reduce #'min array))
 	for this-max = (if (= (length array) 0) 0 (reduce #'max array))
@@ -42,7 +42,7 @@
 	    (line-height (+ (clim:stream-line-height stream) 2)))
 	(fresh-line stream)
 	(multiple-value-bind (transform vertical-space)
-	    (transform-and-y-offset-for-bbox x-scale y-scale 
+	    (transform-and-y-offset-for-bbox x-scale y-scale
 					     left bottom right top
 					     left-margin line-height)
 	  (clim:stream-increment-cursor-position stream 0 (+ (* 2 line-height) vertical-space))
@@ -56,11 +56,11 @@
 		(draw-color-key stream (/ (+ top bottom) 2) right colors parameter-names))
 	      (when (and label (not (eql :none label)))
 		(draw-label label stream left bottom right line-height))
-	      (clim:draw-text* stream (format nil "Scale: ~5,2,,,,f" y-scale)
+	      (clim:draw-text* stream (format nil "Scale: ~5,2,,f" y-scale)
 			       left top
 			       :ink *grid-color*
 			       :align-x :left :align-y :bottom)
-	      (clim:draw-text* stream (format nil "Scale: ~5,2,,,,f" x-scale)
+	      (clim:draw-text* stream (format nil "Scale: ~5,2,,,f" x-scale)
 			       right bottom
 			       :align-x :left :align-y :bottom
 			       :ink *grid-color*)
@@ -107,8 +107,7 @@
 			   :align-x :left
 			   :align-y :center)
 	  (clim:draw-text* stream
-			   (format nil "Sensor ~,2f"
-				   false-value true-value)
+			   (format nil "Sensor ~,2f" false-value)
 			   (+ spoofed-value-x 20) (+ spoofed-value-y line-height)
 			   :ink clim:+red+
 			   :align-x :left
@@ -135,7 +134,7 @@
 			      :ink *grid-color*
 			      )
 	     (clim:with-text-size (stream :very-small)
-	       (clim:draw-text* stream (format nil "~,v,,,,f" y-n-decimals y)
+	       (clim:draw-text* stream (format nil "~,v,,,f" y-n-decimals y)
 				label-position y
 				:align-x label-x-attachment
 				:align-y label-y-attachment
@@ -158,7 +157,7 @@
 			      :line-thickness 0
 			      :line-dashes t
 			      :ink *grid-color*)
-	     (clim:draw-text* stream (format nil "~,v,,,,f" x-n-decimals x)
+	     (clim:draw-text* stream (format nil "~,v,,,f" x-n-decimals x)
 			      x label-position
 			      :text-size :very-small
 			      :align-x label-x-attachment
@@ -203,7 +202,7 @@
 
 (defun transform-and-y-offset-for-bbox (x-scale y-scale left bottom right top
 					&optional (left-margin 0) (bottom-margin 0))
-  (declare (values transform vertical-space)
+  (declare #+(or allegro genera) (values transform vertical-space)
 	   (ignore right))
   (let* ((height (- top bottom))
 	 (vertical-space (+ bottom-margin (* y-scale height)))
@@ -215,8 +214,23 @@
 		      )))
     (values transform vertical-space)))
 
-(defvar +forest-green+ (clim-utils::find-named-color "forest-green" (clim:frame-manager-palette (clim:find-frame-manager))))
-(defvar +orange+ (clim-utils::find-named-color "orange" (clim:frame-manager-palette (clim:find-frame-manager))))
-(defvar +violet+ (clim-utils::find-named-color "violet" (clim:frame-manager-palette (clim:find-frame-manager))))
-(defvar +navy+ (clim-utils::find-named-color "navy blue" (clim:frame-manager-palette (clim:find-frame-manager))))
-(defvar +light-blue+ (clim-utils::find-named-color "light blue" (clim:frame-manager-palette (clim:find-frame-manager))))
+(defvar +forest-green+
+  #-mcclim (clim-utils::find-named-color "forest-green" (clim:frame-manager-palette (clim:find-frame-manager)))
+  #+mcclim clim-internals::+Forestgreen+
+        )
+
+(defvar +orange+
+  #-mcclim (clim-utils::find-named-color "orange" (clim:frame-manager-palette (clim:find-frame-manager)))
+  #+mcclim clim-internals::+orange+)
+
+(defvar +violet+
+  #-mcclim (clim-utils::find-named-color "violet" (clim:frame-manager-palette (clim:find-frame-manager)))
+  #+mcclim clim-internals::+violet+)
+
+(defvar +navy+
+  #-mcclim (clim-utils::find-named-color "navy blue" (clim:frame-manager-palette (clim:find-frame-manager)))
+  #+mcclim clim-internals::+navy+)
+
+(defvar +light-blue+
+  #-mcclim (clim-utils::find-named-color "light blue" (clim:frame-manager-palette (clim:find-frame-manager)))
+  #+mcclim clim-internals::+light-blue+)

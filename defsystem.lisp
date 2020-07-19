@@ -1,4 +1,4 @@
-;;; -*- Syntax: Ansi-common-lisp; Package: cl-USER; Base: 10; Mode: LISP -*- 
+;;; -*- Syntax: Ansi-common-lisp; Package: cl-USER; Base: 10; Mode: LISP -*-
 
 (in-package :cl-user)
 
@@ -16,7 +16,7 @@
 					 :host host
 					 :device device))
 	  (wild-directory (make-pathname :directory wild-dir
-					 :host host 
+					 :host host
 					 :device device
 					 :type :wild
 					 :name :wild
@@ -26,17 +26,17 @@
 	  ("home;*.*" ,home-directory)
 	  ("**;*.*"   ,wild-directory)
 	  ))
-      (with-open-file (F #P"controls:home;my-logical-pathnames.lisp" 
+      (with-open-file (F #P"controls:home;my-logical-pathnames.lisp"
 		       :direction :output
 		       :if-does-not-exist :create
-
 		       :if-exists :supersede)
 	(format f "~%;;; controls")
 	(format f "~2%~s" "controls")
 	(loop for (a b) in (logical-pathname-translations "controls")
 	  do (format f "~%'(~s ~s)" (namestring a) (namestring b)))
 	(terpri f)
-	)      
+	)
+      #+allegro
       (pushnew (namestring (truename #P"controls:home;my-logical-pathnames.lisp"))
 	       (logical-pathname-translations-database-pathnames)
 	       :test #'string-equal)
@@ -45,6 +45,7 @@
 
 (ql:quickload "cl-randist")
 
+#+allegro
 (defsystem controls
     (:default-pathname "controls:code;"
 	:default-module-class separate-destination-module)
@@ -57,11 +58,16 @@
    ("paper-simulation" (:module-class separate-destination-module))
    ))
 
-
-
-
-
-
-
-
-
+#+sbcl
+(asdf:defsystem controls
+  :pathname "."
+  :name "comtrols"
+  :description "Control System Simulator"
+  :maintainer "Howie Shrobe"
+  :serial t
+  :components ((:file "trace-format")
+               (:joshua-file"plot" )
+               (:joshua-file"kalman")
+               (:joshua-file"simulator" )
+               (:joshua-file "wrapping" )
+               (:joshua-file "paper-simulation")))
