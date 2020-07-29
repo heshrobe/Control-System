@@ -2,11 +2,13 @@
 
 (in-package :awdrat)
 
-(defparameter *do-tracing* nil)
+;;; This is now in a separate file called trace-format that is
+;;; loaded before everything else
+;;; (defparameter *do-tracing* nil)
 
-(defmacro trace-format (control-string &rest args)
-  `(when *do-tracing*
-     (format *error-output* ,control-string ,@args)))
+;;; (defmacro trace-format (control-string &rest args)
+;;;   `(when *do-tracing*
+;;;      (format *error-output* ,control-string ,@args)))
 
 ;;; The plant events
 ;;; We just notice that the plant starts up
@@ -29,17 +31,17 @@
     :outputs (plant-data))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; 
+;;;
 ;;;      The controller Model
 ;;;      The conceptual steps of the computation:
-;;; 
+;;;
 ;;;                                               | sensor-value
 ;;;           --------------------------   estimate-error
 ;;;           |                              /           \
 ;;;           |                 compute-integral       compute-derivative
 ;;;           |                         |                        |
 ;;;     compute-proportional-term  compute-integral-term compute-derivative-term
-;;;            |                 \          |              / 
+;;;            |                 \          |              /
 ;;;            |                 compute-total-correction
 ;;;            |                            |
 ;;;          error                        correction
@@ -63,19 +65,19 @@
 ;;; and then summing them.
 ;;; The way this monitor works is that when the respond-to-sensor-value event is noticed
 ;;; it precomputes what should happen, stores those results and then returns.
-;;; The sub-event tracers below, then just check that what the "real" system did corresponds to 
+;;; The sub-event tracers below, then just check that what the "real" system did corresponds to
 ;;; these saved values.
 
 ;;; This step computes the error, i.e. the difference between the set-point and the estimated-state
-(register-event compute-error (flet respond-to-sensor-value compute-error))
+(register-event compute-error respond-to-sensor-value-compute-error)
 
 ;;; This step estimates the state of the plant given the sensor value, past state and the last command issued
 ;;; I.e. it runs a Kalman filter
 ;; (register-event estimate-state (flet respond-to-sensor-value estimate-state))
 ;;; These three are the steps that weight P,I and D values
-(register-event compute-proportional-term (flet respond-to-sensor-value compute-new-proportional-term))
-(register-event compute-derivative-term (flet respond-to-sensor-value compute-new-derivative-term))
-(register-event compute-integral-term (flet respond-to-sensor-value compute-new-integral-term))
+(register-event compute-proportional-term respond-to-sensor-value-compute-new-proportional-term)
+(register-event compute-derivative-term respond-to-sensor-value-compute-new-derivative-term)
+(register-event compute-integral-term respond-to-sensor-value-compute-new-integral-term)
 ;;; The conceptual step of computing the correction begins with compute-correction and ends with clip-correction
 ;;; There's an internal data flow between these two, but we'll ignore that level of detail
 ;; (register-event compute-correction (flet respond-to-sensor-value compute-total-correction))
@@ -318,7 +320,7 @@
 ;;; On each step, it will present the sensor value to the controller and the command of the real controller to the plant model.
 ;;; Since presenting the sensor value to the monitor's controller will precompute all the values
 ;;; All these tracers need to do is to check against those.
- 
+
 (deftracer (plant-startup entry) (frame)
   (let* ((my-plant-copy (copy-a-plant (plant frame)))
 	 ;; notice that copy-a-plant makes a copy and does reset on it, so my kalman-filter starts
@@ -367,7 +369,7 @@
 ;;; The approach in each of these is to compute what the "real" system would do in
 ;;; the entry tracer and then squirrel away the result in the monitor
 ;;; so that it be checked in the exit tracer against what the "real" system returns
-;;; 
+;;;
 ;;; Each of the steps corresponds to the compute-xxx-term method in the controller
 ;;; not to the compute-new-xxx (e.g. compute new-integral)
 ;;; These get the result of compute-new-xxx as input
@@ -382,7 +384,7 @@
   (let ((monitor-information (awdrat-information clim:*application-frame*)))
     (with-slots (initialized? time-step simulated-time time-step-number current-observation) monitor-information
       (when (not initialized?)
-	(setq time-step dt 
+	(setq time-step dt
 	      time-step-number 0
 	      simulated-time 0
 	      initialized? t))
@@ -395,8 +397,8 @@
 ;;; By the time that this gets invoked, the sub-steps have done their
 ;;; thing and stored away the integral, derivative and proportional terms.
 ;;; we just need to add them up and check that it's the same as the command
-(deftracer (controller-step exit) (command error)
-  (declare (ignore error))
+(deftracer (controller-step exit) (command error residual)
+  (declare (ignore error residual))
   (let* ((monitor-information (awdrat-information clim:*application-frame*))
 	 (reference-controller (reference-controller monitor-information)))
     (with-slots (lower-limit upper-limit proportional-term integral-term derivative-term) reference-controller
@@ -413,12 +415,13 @@
 	    (trace-format "~%Bailing out in controller step exit")
 	    (throw 'stop-the-simulation (values)))
 	  )))))
-      
+
 ;;; Notice here that wer're getting passed the "real" system's state-estimate
 ;;; and we've stored away the observation as well.
 ;;; So we can compute the same error as "real" system
 ;;; and store that away to check against in the exit tracer
-(deftracer (compute-error entry) (state-estimate)
+(deftracer (compute-error entry) (controller state-estimate)
+  (declare (ignore controller))
   (let* ((monitor-information (awdrat-information clim:*application-frame*))
 	 (observation (current-observation monitor-information))
 	 (reference-controller (reference-controller monitor-information))
@@ -428,7 +431,7 @@
     (with-slots (time-step-number simulated-time predicted-sensor-sequence divergence-threshold) monitor-information
       ;; (vector-push-extend estimated-state predicted-sensor-sequence)
       (unless (< (abs residual) divergence-threshold)
-	(setf (error-detected monitor-information) 
+	(setf (error-detected monitor-information)
 	  (list time-step-number simulated-time state-estimate observation))
 	(trace-format "~%Bailing out in controller step entry, residual is ~a" residual)
 	(throw 'stop-the-simulation (values)))
@@ -436,7 +439,7 @@
       ;; as the last-error and save the computed error to check against in the exit tracer
       (let ((current-error (- state-estimate set-point)))
 	(trace-format "~%Monitor calculated error ~a" current-error)
-	(setf (last-signal-error reference-controller)  (current-signal-error reference-controller) 
+	(setf (last-signal-error reference-controller)  (current-signal-error reference-controller)
 	      (current-signal-error reference-controller) current-error))
       )))
 
@@ -460,7 +463,8 @@
 ;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(deftracer (compute-proportional-term entry) (proportional)
+(deftracer (compute-proportional-term entry) (controller proportional)
+  (declare (ignore controller))
   (let* ((monitor-information (awdrat-information clim:*application-frame*))
 	 (reference-controller (reference-controller monitor-information))
 	 (kp (kp reference-controller))
@@ -490,7 +494,8 @@
 ;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(deftracer (compute-integral-term entry) (the-integral)
+(deftracer (compute-integral-term entry) (controller the-integral)
+  (declare (ignore controller))
   (trace-format "~%In monitor compute-integral-term got ~a" the-integral)
   (let* ((monitor-information (awdrat-information clim:*application-frame*))
 	 (reference-controller (reference-controller monitor-information)))
@@ -509,7 +514,7 @@
 	  (incf integral expected-integral))))))
 
 (deftracer (compute-integral-term exit) (what-he-did)
-  (let* ((monitor-information (awdrat-information clim:*application-frame*)) 
+  (let* ((monitor-information (awdrat-information clim:*application-frame*))
 	 (reference-controller (reference-controller monitor-information))
 	 (expected-integral-term (integral-term reference-controller)))
     (unless (= what-he-did expected-integral-term)
@@ -524,7 +529,8 @@
 ;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(deftracer (compute-derivative-term entry) (the-derivative)
+(deftracer (compute-derivative-term entry) (controller the-derivative)
+  (declare (ignore controller))
   (let* ((monitor-information (awdrat-information clim:*application-frame*))
 	 (reference-controller (reference-controller monitor-information)))
     (with-slots ((dt time-step)) monitor-information
@@ -545,7 +551,7 @@
     (unless (= what-he-did expected-kd)
       (setf (miscalculation monitor-information) (list 'kd what-he-did expected-kd))
       (trace-format "~%Bailing out in derivative term exit got ~a expected ~a" what-he-did expected-kd)
-      (throw 'stop-the-simulation (values)))))	
+      (throw 'stop-the-simulation (values)))))
 
 ;;; Notes
 ;;; The big question is what to do about the plant model
@@ -566,12 +572,12 @@
 ;;; even when not being spoofed.  We share the sensor noise (there's only the real sensor
 ;;; after all) but our model may not have process noise.  The process noise is supposed to
 ;;; be zero-mean guassian so it shouldn't add up over time (and the controller corrects for it)
-;;; so probably the real system and our model of the plant should stay within a sigma or two 
+;;; so probably the real system and our model of the plant should stay within a sigma or two
 ;;; of each other.
 
 (defun check-residuals ()
   (let* ((residuals (second (assoc 'residual (plot-data *control-system-frame*))))
-	 (length (length residuals)) 
+	 (length (length residuals))
 	 (mean (/ (reduce #'+ residuals) length))
 	 (sigma (/ (sqrt (loop for item across residuals
 			     for deviation = (- item mean)

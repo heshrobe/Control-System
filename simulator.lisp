@@ -12,7 +12,7 @@
 ;;;  `(flet ((centering-output-body (,stream) ,@body))
 ;;;     (declare (dynamic-extent #'centering-output-body))
 ;;;     (clim-internals::invoke-centering-output
-;;;      ,stream #'centering-output-body 
+;;;      ,stream #'centering-output-body
 ;;;      :move-cursor ,move-cursor)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -70,17 +70,17 @@
    (upper-limit :initarg :upper-limit :accessor upper-limit :initform nil)
    (saved-kp :accessor saved-kp)
    (saved-ki :accessor saved-ki)
-   (saved-kd :accessor saved-kd) 
+   (saved-kd :accessor saved-kd)
    ;; This is the guy used to estimate the
    ;; state given the control provided and the observed outputs
    (kalman-filter :accessor kalman-filter :initarg :kalman-filter)
    ))
 
 (defmethod reset ((controller pid-controller))
-  (setf (integral controller) 0
-	(signal-error controller) 0
-	(proportional controller) 0
-	(derivative controller) 0
+  (setf (integral controller) 0.0
+	(signal-error controller) 0.0
+	(proportional controller) 0.0
+	(derivative controller) 0.0
 	))
 
 (defmethod save-pid ((controller pid-controller))
@@ -93,49 +93,79 @@
 	  (ki controller) (saved-ki controller)
 	  (kd controller) (saved-kd controller))
   )
-  
+
 ;;; I rewrote this so that it makes explicit the computational steps that are required.
 ;;; Now the model of this can be interesting.
-;;; Also it's a function now so that I can wrap its internals
+;;; Also it's a function now so that I can wrap its internals in Allegro but not SBCL!
+;;; So in SBCL I'm rewriting with several external functions (sigh).
+
+(defun respond-to-sensor-value-estimate-state (controller last-control observation)
+  (with-slots (kalman-filter) controller
+    (trace-format "~%Respond to sensor observation ~a last control ~a" observation last-control)
+    (estimate-state kalman-filter last-control observation)))
+
+(defun respond-to-sensor-value-compute-error (controller state-estimate)
+  (with-slots (setpoint) controller
+    (- state-estimate setpoint)))
+
+(defun respond-to-sensor-value-compute-new-derivative (controller new-signal-error dt)
+  (with-slots (signal-error integral kp ki kd setpoint upper-limit lower-limit kalman-filter) controller
+    (derivative-slice signal-error dt)))
+
+(defun respond-to-sensor-value-compute-new-integral (controller new-signal-error dt)
+  (with-slots (signal-error integral kp ki kd setpoint upper-limit lower-limit kalman-filter) controller
+    (trace-format "~%In simulator old-signal-error ~a new-signal-error ~a dt ~a" signal-error new-signal-error dt)
+    (let ((answer (integral-slice signal-error dt)))
+      (trace-format "~%In simulator integral is ~a" answer)
+      answer)))
+
+(defun respond-to-sensor-value-accumulate-error (controller new-integral)
+  (with-slots (integral) controller
+    (incf integral new-integral)))
+
+(defun respond-to-sensor-value-update-state (controller new-signal-error)
+  (with-slots (signal-error) controller
+    (update-values signal-error)))
+
+(defun respond-to-sensor-value-compute-new-proportional-term (controller proportional)
+  (with-slots (kp) controller
+    (* kp proportional)))
+
+(defun respond-to-sensor-value-compute-new-integral-term (controller integral)
+  (with-slots (ki) controller
+    (trace-format "~%In simulator compute-new-integral-term integral is ~a" integral)
+    (* ki integral)))
+
+(defun respond-to-sensor-value-compute-new-derivative-term (controller derivative)
+  (with-slots (kd) controller
+    (* kd derivative)))
+
+(defun respond-to-sensor-value-compute-total-correction (controller p i d)
+  (declare (ignore controller))
+  (- (+ p i d)))
+
 (defun respond-to-sensor-value (controller last-control observation dt)
   (with-slots (signal-error integral kp ki kd setpoint upper-limit lower-limit kalman-filter) controller
-    (flet ((estimate-state (last-control observation) 
-	     (trace-format "~%Respond to sensor observation ~a last control ~a" observation last-control)
-	     (estimate-state kalman-filter last-control observation))
-	   (compute-error (state-estimate) (- state-estimate setpoint))
-	   (compute-new-derivative (new-signal-error) (derivative-slice signal-error dt))
-	   (compute-new-integral (new-signal-error) 
-	     (trace-format "~%In simulator old-signal-error ~a new-signal-error ~a dt ~a" signal-error new-signal-error dt)
-	     (let ((answer (integral-slice signal-error dt)))
-	       (trace-format "~%In simulator integral is ~a" answer)
-	       answer))
-	   (accumulate-error (new-integral) (incf integral new-integral))
-	   (update-state (new-signal-error) (update-values signal-error))
-	   (compute-new-proportional-term (proportional) (* kp proportional))
-	   (compute-new-integral-term (integral) 
-	     (trace-format "~%In simulator compute-new-integral-term integral is ~a" integral)
-	     (* ki integral))
-	   (compute-new-derivative-term (derivative) (* kd derivative))
-	   (compute-total-correction (p i d) (- (+ p i d)))
-	   (clip (value)
+    (flet ((clip (value)
 	     (when lower-limit (setq value (max lower-limit value)))
 	     (when upper-limit (setq value (min upper-limit value)))
 	     value))
-      (multiple-value-bind (estimated-state prior-state-estimate estimated-output residual) (estimate-state last-control observation)
+      (multiple-value-bind (estimated-state prior-state-estimate estimated-output residual)
+          (respond-to-sensor-value-estimate-state controller last-control observation)
 	(declare (ignore prior-state-estimate estimated-output))
-      (trace-format "~%Controller estimated state ~d" estimated-state)
-	(let* ((new-signal-error (compute-error estimated-state)))
+        (trace-format "~%Controller estimated state ~d" estimated-state)
+	(let* ((new-signal-error (respond-to-sensor-value-compute-error controller estimated-state)))
 	  (let ((new-proportional new-signal-error)
-		(new-derivative (compute-new-derivative new-signal-error))
-		(new-integral (compute-new-integral new-signal-error)))
-	    (accumulate-error new-integral)
+		(new-derivative (respond-to-sensor-value-compute-new-derivative controller new-signal-error dt))
+		(new-integral (respond-to-sensor-value-compute-new-integral controller new-signal-error dt)))
+	    (respond-to-sensor-value-accumulate-error controller new-integral)
 	    (setf (derivative controller) new-derivative
 		  (proportional controller) new-proportional)
-	    (update-state new-signal-error)
-	    (let ((prop-term (compute-new-proportional-term new-proportional))
-		  (int-term (compute-new-integral-term new-integral))
-		  (deriv-term (compute-new-derivative-term new-derivative)))
-	      (let ((correction (compute-total-correction prop-term int-term deriv-term)))
+	    (respond-to-sensor-value-update-state controller new-signal-error)
+	    (let ((prop-term (respond-to-sensor-value-compute-new-proportional-term controller new-proportional))
+		  (int-term (respond-to-sensor-value-compute-new-integral-term controller new-integral))
+		  (deriv-term (respond-to-sensor-value-compute-new-derivative-term controller new-derivative)))
+	      (let ((correction (respond-to-sensor-value-compute-total-correction controller prop-term int-term deriv-term)))
 		(let ((clipped-correction (clip correction)))
 		  (values clipped-correction signal-error residual))))))))))
 
@@ -168,7 +198,7 @@
 	 (residual-sequence (make-array number-of-steps :fill-pointer 0 :adjustable t))
 	 (command-sequence (make-array number-of-steps :fill-pointer 0 :adjustable t))
 	 (plant-signal-alist  (loop for name in signal-labels collect (list name (make-array number-of-steps :fill-pointer 0 :adjustable t))))
-	 (full-signal-alist (append `((error ,error-sequence) 
+	 (full-signal-alist (append `((error ,error-sequence)
 				      (residual ,residual-sequence)
 				      ,@(if (eql signal-distarter-type 'identity) nil `((spoofed-sensor ,spoofed-sensor-sequence)))
 				      (command ,command-sequence))
@@ -183,7 +213,7 @@
     ;; Because this might depend on the kalman filter being initialized
     (setq signal-distorter (apply (first signal-distorter-form) (rest signal-distorter-form)))
     ;; The simulation will start by initializing the plant on time step 0 and geting its outputs
-    ;; and then calling the controller on time step 0.  
+    ;; and then calling the controller on time step 0.
     ;; Then on each succeeding time step we pass the controller command
     ;; to the plant and get its output.
     (let* ((frame clim:*application-frame*)
@@ -196,56 +226,60 @@
 	   (transform (clim:make-scaling-transformation (/ pane-width 20) (/ pane-height (* 2 set-point))))
 	   (offset (clim:untransform-distance transform 3 0))
 	   )
-       (clim:with-first-quadrant-coordinates (pane 0 pane-height)
+      (clim:with-first-quadrant-coordinates (pane 0 pane-height)
 	(clim:with-drawing-options (pane :transformation transform)
 	  (clim:with-output-recording-options (pane :draw t :record nil)
-	    (when display 
+	    (when display
 	      (clim:window-clear pane)
 	      ;; line for the set-point
 	      (clim:draw-line* pane 0 set-point pane-width set-point :ink clim:+black+ :line-style dashed-line-style)
 	      (clim:draw-line* pane 0 (* 1.5 set-point) pane-width (* 1.5 set-point) :ink clim:+red+ :line-style dashed-line-style)
 	      (clim:draw-line* pane 0 (* .5 set-point) pane-width (* .5 set-point) :ink clim:+red+ :line-style dashed-line-style)
 	      ;; lines for the tank
-	      (clim:draw-lines* pane (list (- 5 offset) (* 2 set-point) (- 5 offset) 0 (+ 10 offset) 0 (+ 10 offset) (* 2 set-point)) 
+	      (clim:draw-lines* pane (list (- 5 offset) (* 2 set-point) (- 5 offset) 0 (+ 10 offset) 0 (+ 10 offset) (* 2 set-point))
 				:ink clim:+black+ :line-thickness 3))
 	    (catch 'stop-the-simulation
-	      (loop for sim-time from 0 by dt below time
-		  for command = 0 then next-command
-		  for plant-output = (let ((plant-observation-alist (respond-to-command plant command dt)))
-				       ;; now observe everything the plant told us
-				       (loop for (name vector) in plant-signal-alist
-					   for observation = (second (assoc name plant-observation-alist))
-					   do (vector-push-extend observation vector))
-				       ;; and then return the plant's output from the alist
-				       (second (assoc plant-output-name plant-observation-alist)))
-		  for spoofed-sensor = (if signal-distorter (funcall signal-distorter (setpoint controller) plant-output command sim-time) plant-output)
-		  for next-command = (multiple-value-bind (command error residual) (respond-to-sensor-value controller command spoofed-sensor dt)
-				       ;; and observe the sensor-value, error, and controller's command
-				       (observe error spoofed-sensor command residual)
-				       command)
-		  ;; do (trace-format "~%Actual plant output at time ~d is ~a" sim-time plant-output)
-		  when display
-		  do (clim:draw-rectangle* pane 5 0 10 plant-output :ink +light-blue+)
-		     (sleep .1)
-		     (clim:draw-rectangle* pane 5 0 10 plant-output :ink clim:+background-ink+)
-		  when (and controller-hacker (not signal-hacked) (first controller-hacker) (>= sim-time (second controller-hacker)))
-		  do (setq signal-hacked t)
-		     (case (first controller-hacker)
-		       (kp (setf (kp controller) (third controller-hacker)))
-		       (ki (setf (ki controller) (third controller-hacker)))
-		       (kd (setf (kd controller) (third controller-hacker)))
-		       )
-		     ;; the below will be irrelevant now that the tracers throw to stop-the-simulation
-		     ;; I think.
-		  until (and (awdrat-enabled? clim:*application-frame*)
-			     (or (error-detected (awdrat-information clim:*application-frame*))
-				 (miscalculation (awdrat-information clim:*application-frame*))))
-			))
+	      (loop for sim-time from 0.0 by dt below time
+                    for command = 0.0 then next-command
+                    for plant-output = (let ((plant-observation-alist (respond-to-command plant command dt)))
+                                         ;; now observe everything the plant told us
+                                         (loop for (name vector) in plant-signal-alist
+                                               for observation = (second (assoc name plant-observation-alist))
+                                               do (vector-push-extend observation vector))
+                                         ;; and then return the plant's output from the alist
+                                         (second (assoc plant-output-name plant-observation-alist)))
+                    for spoofed-sensor = (if signal-distorter (funcall signal-distorter (setpoint controller) plant-output command sim-time) plant-output)
+                    for next-command = (multiple-value-bind (command error residual) (respond-to-sensor-value controller command spoofed-sensor dt)
+                                         ;; and observe the sensor-value, error, and controller's command
+                                         (observe error spoofed-sensor command residual)
+                                         command)
+                    do (trace-format "~%Actual plant output at time ~d is ~a" sim-time plant-output)
+                    when display
+                      do (trace-format "~%Drawing ~a~%" plant-output)
+                         (clim:draw-rectangle* pane 5 0 10 (float plant-output) :ink +light-blue+)
+                    #+mcclim (force-output pane)
+                             (sleep .1)
+                             (trace-format "~%Erasing ~a~%" plant-output)
+                             (clim:draw-rectangle* pane 5 0 10 (float plant-output) :ink clim:+background-ink+)
+                    #+mcclim (force-output pane)
+                    when (and controller-hacker (not signal-hacked) (first controller-hacker) (>= sim-time (second controller-hacker)))
+                      do (setq signal-hacked t)
+                         (case (first controller-hacker)
+                           (kp (setf (kp controller) (third controller-hacker)))
+                           (ki (setf (ki controller) (third controller-hacker)))
+                           (kd (setf (kd controller) (third controller-hacker)))
+                           )
+                         ;; the below will be irrelevant now that the tracers throw to stop-the-simulation
+                         ;; I think.
+                    until (and (awdrat-enabled? clim:*application-frame*)
+                               (or (error-detected (awdrat-information clim:*application-frame*))
+                                   (miscalculation (awdrat-information clim:*application-frame*))))
+                    ))
 	    ))))
     full-signal-alist))
 
 ;;; Top level driver for standalone use to interface to plotting code
-(defun oo-do-it (plant controller 
+(defun oo-do-it (plant controller
 		 &key
 		 (time 10) (dt 0.01)
 		 ;; The function for lying about the plant output
@@ -259,7 +293,7 @@
     (plot (mapcar #'second results)
 	  :x-grid-increment 5 :y-grid-increment 5
 	  :x-scale 30
-	  :y-scale 30 
+	  :y-scale 30
 	  :x-value-increment dt
 	  :colors plot-colors
 	  :parameter-names (list* 'error 'sensor 'command signal-labels)
@@ -283,7 +317,7 @@
 
 (defun make-a-fixed-offset-distorter (start-time stop-time offset &optional control-system)
   (declare (ignore control-system))
-  (flet ((distorter (set-point observation command time) 
+  (flet ((distorter (set-point observation command time)
 	   (declare (ignore set-point command))
 	   (cond
 	    ((< time start-time) observation)
@@ -294,7 +328,7 @@
 
 (defun make-a-setpoint-offset-distorter (start-time stop-time offset &optional control-system)
   (declare (ignore control-system))
-  (flet ((distorter (set-point observation command time) 
+  (flet ((distorter (set-point observation command time)
 	   (declare (ignore command))
 	   (cond
 	    ((< time start-time) observation)
@@ -395,26 +429,26 @@ let Y be the observed output
 (defclass water-tank-plant-model ()
   (;; First are the parameters describing the system
    ;; Area is the cross-sectional area of the tank in square feet
-   (Area :accessor area :initarg :area :initform 10)
+   (Area :accessor area :initarg :area :initform 10.0)
    ;; the proportionality constant for the pump in cu-ft/sec/volt (i.e. a 1 volt input causes the pump to move 1 cu-ft/sec
-   (pump-rate-scale :accessor pump-rate-scale :initarg :pump-rate-scale :initform 10)
+   (pump-rate-scale :accessor pump-rate-scale :initarg :pump-rate-scale :initform 10.0)
    ;; the proportionality constant for the drain-hole in cu-ft/sec/exp(ft,.5)
-   (drain-rate :accessor drain-rate :initarg :drain-rate :initform 1)
+   (drain-rate :accessor drain-rate :initarg :drain-rate :initform 1.0)
    ;; Now the state-variables
    ;; the height of the water in the tank
-   (height :accessor height :initform 10 :initarg :height)
+   (height :accessor height :initform 10.0 :initarg :height)
    ;; the volume redundant with height, but who cares
    (volume :accessor volume)
    ;; the old pump rate
-   (pump-rate :accessor pump-rate :initform 0)
-   (sensor-noise-sigma :accessor sensor-noise-sigma :initform 0.2 :Initarg :sensor-noise-sigmma)
+   (pump-rate :accessor pump-rate :initform 0.0)
+   (sensor-noise-sigma :accessor sensor-noise-sigma :initform 0.2 :Initarg :sensor-noise-sigma)
    (system-noise-sigma :accessor system-noise-sigma :initform 0.2 :initarg :system-noise-sigma)
    (simulation-frame :accessor simulation-frame :initarg :simulation-frame)
    ))
 
 (defmethod reset ((tank water-tank-plant-model))
   (setf (height tank) (initial-tank-height (simulation-frame tank))
-	(pump-rate tank) 0)  
+	(pump-rate tank) 0.0)
   )
 
 (defmethod kalman-filter-constructor ((tank water-tank-plant-model))
@@ -431,18 +465,20 @@ let Y be the observed output
   (with-slots (height pump-rate pump-rate-scale drain-rate volume area) tank
     ;; using setf so that the setf method calculates the volume
     (setf (height tank) initial-value
-	  (pump-rate tank) 0)
+	  (pump-rate tank) 0.0
+          (volume tank) volume
+          (drain-rate tank) drain-rate)
     (let ((current-drain-rate (* (sqrt height) drain-rate)))
-      `((height ,height) (sensor-value ,height) (volume ,volume) (pump-rate 0) (drain-rate ,current-drain-rate)))))
+      `((height ,height) (sensor-value ,height) (volume ,volume) (pump-rate 0.0) (drain-rate ,current-drain-rate)))))
 
 (defmethod initial-output ((tank water-tank-plant-model))
   (height tank))
 
 (defmethod tank-drain ((tank water-tank-plant-model) dt)
   (with-slots (height drain-rate volume area) tank
-    ;; notice this is using only the old value since we're calculating 
-    ;; the new value using this 
-    (let* ((current-drain-rate (* (If (minusp height) 0 (sqrt height)) drain-rate))
+    ;; notice this is using only the old value since we're calculating
+    ;; the new value using this
+    (let* ((current-drain-rate (* (If (minusp height) 0.0 (sqrt height)) drain-rate))
 	   (drain-volume-increment (* current-drain-rate dt)))
       drain-volume-increment
       )))
@@ -453,23 +489,23 @@ let Y be the observed output
 	   (pump-volume-increment (integral-slice pump-rate dt))
 	   ;; notice this is using only the old value since we're calculating
 	   ;; the new value using this
-	   (current-drain-rate (if (minusp height) 0 (* (sqrt height) drain-rate)))
+	   (current-drain-rate (if (minusp height) 0.0 (* (sqrt height) drain-rate)))
 	   (drain-volume-increment (* current-drain-rate dt))
 	   (volume-delta (- pump-volume-increment drain-volume-increment))
-	   (plant-random (randist:random-normal 0 (system-noise-sigma tank)))
+	   (plant-random (randist:random-normal 0.0d0 (float (system-noise-sigma tank) 1.0d0)))
 	   (random-volume-addition (* plant-random area))
 	   (new-volume (+ volume volume-delta random-volume-addition))
-	   (new-height (max 0 (/ new-volume area))))
-      (trace-format "~2%Real Plant responding to command ~a, old-height ~a, new height ~a old-pump rate ~a pump rate ~a" 
+	   (new-height (max 0.0 (/ new-volume area))))
+      (trace-format "~2%Real Plant responding to command ~a, old-height ~a, new height ~a old-pump rate ~a pump rate ~a"
 		    control height new-height pump-rate new-pump-rate)
       (trace-format"~%Plant random ~a" plant-random)
       (update-values height volume pump-rate)
       ;; return an alist of interesting values
-      (let* ((sensor-random (randist:random-normal 0 (system-noise-sigma tank)))
+      (let* ((sensor-random (randist:random-normal 0.0d0 (float (system-noise-sigma tank) 1.0d0)))
 	     (noisy-height (+ height sensor-random)))
 	(trace-format"~%Sensor random ~a" sensor-random)
 	(trace-format "~%Sensed height ~a" noisy-height)
-	`((height ,height) 
+	`((height ,height)
 	  (sensor-value ,noisy-height)
 	  (volume ,volume) (pump-rate ,pump-rate) (drain-rate ,current-drain-rate)
 	  (pump-volume-increment ,pump-volume-increment)
@@ -481,9 +517,9 @@ let Y be the observed output
     (sensor-noise-sigma "Sigma of sensor noise (m)" number)
     (system-noise-sigma "Sigma of system noise (m)" number)
     (area "Area (m^2)" number)
-    (pump-rate-scale "Pump Scale (m^3 / s / mV)" number) 
+    (pump-rate-scale "Pump Scale (m^3 / s / mV)" number)
     (drain-rate "Drain Rate Factor (m^(5/2) / s)" number)))
- 
+
 (defmethod signals-of-interest ((tank water-tank-plant-model))
   '(height sensor-value volume pump-rate drain-rate))
 
@@ -507,7 +543,7 @@ let Y be the observed output
 
 (defmethod initial-output ((pm abstract-plant-model))
   10.)
-			   
+
 
 (defmethod respond-to-command ((pm abstract-plant-model) command dt)
   ;; State-1 is the integral of PID
@@ -515,7 +551,7 @@ let Y be the observed output
   ;; State-3 is the running-sum of State-2 i.e. the Integral of the Integral of PID
   ;; Output is the average value of State-3 in the last time step
   ;; Feedback is a weighted average of State-2 and output
-  (with-slots (state-1 state-3) pm 
+  (with-slots (state-1 state-3) pm
     (let* ((new-state-1 (+ state-1 command)) ;; sum PID term to calculate the first integration
 	   (state-2 (integral-slice state-1 dt)) ;;output after the first integrator
 	   (new-state-3 (+ state-3 state-2))
@@ -560,7 +596,7 @@ let Y be the observed output
     :observation-variance (square (sensor-noise-sigma water-tank))
     ;; Note: We could make this more interesting by making the state be the volume of water
     ;; and the sensor value by the height of the water column in the tank in which case
-    ;; the observation gain would be the area.  Then the 
+    ;; the observation gain would be the area.  Then the
     ;; feedback control would need to be changed as well I think.
     :observation-gain 1
     :initial-state (height water-tank)
@@ -582,7 +618,7 @@ let Y be the observed output
 	   (volume-delta (- pump-volume-increment drain-volume-increment))
 	   (new-volume (+ volume volume-delta))
 	   (new-height (max 0 (/ new-volume area))))
-      (trace-format "~%KF prediction given command ~a, current height ~a old pump rate ~a pump rate ~a" 
+      (trace-format "~%KF prediction given command ~a, current height ~a old pump rate ~a pump rate ~a"
 		    control height pump-rate new-pump-rate)
       (trace-format "~%KF Prior state estimated height ~a given ~a ~a ~a ~a"
 		    height pump-volume-increment drain-volume-increment volume-delta new-height)
@@ -639,7 +675,7 @@ let Y be the observed output
   (let* ((sigma-r (calculate-steady-state-sigma-r filter))
 	 (ratio (/ (* residual residual) sigma-r)))
     (> ratio threshold)))
-		  
+
 
 
 
@@ -683,16 +719,17 @@ let Y be the observed output
   (:panes
    (graph :application
 	  :label "Simulation Results"
-	  :display-after-commands t
+	  #-mcclim :display-after-commands #-mcclim t
+          #+mcclim :display-time #+mcclim :command-loop
 	  :incremental-redisplay nil
 	  :display-function 'display-tank
 	  :scroll-bars t)
    (plant-status :application
 		 :label "System Status"
-		 :display-after-commands t
+                 #-mcclim :display-after-commands #-mcclim t #+mcclim :display-time #+mcclim :command-loop
 		 :incremental-redisplay nil
 		 :display-function 'display-status
-		 :scroll-bars nil)		      
+		 :scroll-bars nil)
    (controller-attacks :accept-values
 		       :display-function '(clim:accept-values-pane-displayer :displayer controller-hack-acceptor))
    (distorter-parameters :accept-values
@@ -711,10 +748,10 @@ let Y be the observed output
 		       :display-function '(clim:accept-values-pane-displayer :displayer simulation-parameters-acceptor)
 		       :scroll-bars t)
    ;; (pointer-doc :pointer-documentation :scroll-bars nil :borders t :max-height '(2 :line) :height '(2 :line))
-   (menu :command-menu 
+   (menu :command-menu
 	 :height :compute
 	 :display-function '(clim:display-command-menu
-			     :x-spacing 30
+			     #-mcclim :x-spacing #-mcclim 30
 			     :row-wise t
 			     :n-columns 7)
 	 :max-height '(6 :line)
@@ -727,7 +764,7 @@ let Y be the observed output
 	       :height '(5 :line)
                :max-height '(5 :line)))
   (:layouts
-   (normal 
+   (normal
     (clim:vertically ()
       (:fill
        (clim:horizontally ()
@@ -774,32 +811,31 @@ let Y be the observed output
 (defmethod display-tank ((frame control-system) stream)
   (if (clear-screen? frame)
       (clim:window-clear stream)
-    (with-slots (plot-data x-grid-increment y-grid-increment x-scale y-scale x-value-increment colors signal-names awdrat-enabled? awdrat-information display-enabled?
-		 signal-distorter) 
-	frame
-      (when (and plot-data display-enabled?)
-	(let* ((all-signal-names (union signal-names (if (eql (first (first signal-distorter)) 'identity)
-							 '(error residual command)
-						       '(spoofed-sensor residual error command))))
-	       (Plot-data (loop for name in all-signal-names 
-			      for data = (second (assoc name plot-data))
-			      collect data)))
-	  (when (and awdrat-information awdrat-enabled?)
-	    (let ((predicted-values (predicted-sensor-sequence (awdrat-information frame)))
-		  (predicted-signal-name (predicted-signal-name frame)))
-	      (push predicted-values plot-data)
-	      (push predicted-signal-name all-signal-names)))
-	  (plot plot-data
-		:stream stream
-		:x-grid-increment x-grid-increment 
-		:y-grid-increment y-grid-increment
-		:x-scale x-scale
-		:y-scale y-scale
-		:x-value-increment x-value-increment
-		:colors colors
-		:parameter-names all-signal-names
-		:error-information (when (and awdrat-enabled? awdrat-information) (error-detected awdrat-information))
-		)))))
+      (with-slots (plot-data x-grid-increment y-grid-increment x-scale y-scale x-value-increment colors signal-names awdrat-enabled? awdrat-information display-enabled?
+                   signal-distorter)
+          frame
+        (when (and plot-data display-enabled?)
+          (let* ((all-signal-names (union signal-names (if (eql (first (first signal-distorter)) 'identity)
+                                                           '(error residual command)
+                                                           '(spoofed-sensor residual error command))))
+                 (Plot-data (loop for name in all-signal-names
+                                  for data = (second (assoc name plot-data))
+                                  collect data)))
+            (when (and awdrat-information awdrat-enabled?)
+              (let ((predicted-values (predicted-sensor-sequence (awdrat-information frame)))
+                    (predicted-signal-name (predicted-signal-name frame)))
+                (push predicted-values plot-data)
+                (push predicted-signal-name all-signal-names)))
+            (plot plot-data
+                  :stream stream
+                  :x-grid-increment x-grid-increment
+                  :y-grid-increment y-grid-increment
+                  :x-scale x-scale
+                  :y-scale y-scale
+                  :x-value-increment x-value-increment
+                  :colors colors
+                  :parameter-names all-signal-names
+                  :error-information (when (and awdrat-enabled? awdrat-information) (error-detected awdrat-information)))))))
   (values))
 
 
@@ -823,7 +859,8 @@ let Y be the observed output
   (accept-a-parameter frame y-scale "Y Scale" 'number stream)
   ;; This really shouldn't be settable by the user.  It's the delta-t from the last simulation
   ;; (accept-a-parameter frame x-value-increment "X Value Increment" 'number stream)
-  (accept-a-parameter frame signal-names "Signals to Plot" `(clim:subset-sequence ,(signals-of-interest (plant frame))) stream :view clim:+textual-view+)
+  (accept-a-parameter frame signal-names "Signals to Plot" `(clim:subset-sequence ,(signals-of-interest (plant frame))) stream
+                      :view #-mcclim clim:+textual-view+ #+mcclim clim:+list-pane-view+)
   )
 
 (defmethod simulation-parameters-acceptor ((frame control-system) stream)
@@ -882,7 +919,7 @@ let Y be the observed output
   (declare (ignorable stream))
   (let ((typed-value (call-next-method)))
     (/ typed-value 100.0)))`
-			
+
 (clim:define-presentation-method clim:present  (object (type percent) stream (view clim:textual-view) &key)
 	(clim:present (* object 100) 'number :stream stream :view view))
 
@@ -890,24 +927,25 @@ let Y be the observed output
   (clim:with-output-centered (stream)
     (clim:with-text-style (stream '(:fix :bold :large))
       (write-string "Signal Corruptors" stream)))
-  (terpri stream) 
+  (terpri stream)
   (terpri stream)
   (let* ((current-distorter (signal-distorter frame))
 	 (current-distorter-description (first current-distorter))
 	 (current-distorter-type (first current-distorter-description))
-	 (type (clim:accept `(clim:member-alist (("None" . identity) 
-						 ("Fixed Offset" . fixed-offset) 
+	 (type (clim:accept `(clim:member-alist (("None" . identity)
+						 ("Fixed Offset" . fixed-offset)
 						 ("Set Point Offset" . setpoint-offset)
 						 ("Increasing Offset" . increasing-offset)
 						 ("Stepped Percent" . stepped-percent)
 						 ("Optimal" . optimal)))
 			    :stream stream
-			    :view clim:+textual-view+
+			    :view #-mcclim clim:+textual-view+ #+mcclim clim:+option-pane-view+
 			    :prompt "Type of signal distortion"
 			    :default (or current-distorter-type 'identity))))
     (terpri stream)
-    (case type
-      (identity 
+    (trace-format "~%Distorter is ~a~%" type)
+    (ecase type
+      (identity
        (setf (signal-distorter frame) `((identity) (make-an-identity-distorter))))
       (setpoint-offset
 	  (let ((parameters (if (eql current-distorter-type 'setpoint-offset)
@@ -988,12 +1026,12 @@ let Y be the observed output
 					    :default delta-percent))
 	   (terpri stream)
 	   (setq sample-rate (clim:accept 'number
-					  :stream stream 
+					  :stream stream
 					  :prompt "Number of samples after which to increment offset"
 					  :default sample-rate))
 	   (setf (signal-distorter frame) `((stepped-percent ,initial-percent ,delta-percent ,sample-rate)
 					    (make-a-staged-percent-distorter ,initial-percent ,delta-percent ,sample-rate))))))
-      (optimal 
+      (optimal
        (let ((parameters (if (eql current-distorter-type 'optimal)
 			     (rest current-distorter-description)
 			   (default-parameters 'optimal-distorter))))
@@ -1003,9 +1041,9 @@ let Y be the observed output
 					:prompt "Threshold (number)"
 					:default threshold))
 	   (terpri stream)
-	   (setq direction (clim:accept '(clim:member-alist (("Up" . up) 
+	   (setq direction (clim:accept '(clim:member-alist (("Up" . up)
 							     ("Down" . down)))
-					:view clim:+textual-view+
+					:view #-mcclim clim:+textual-view+ #+mcclim clim:+radio-box-view+
 					:stream stream
 					:prompt "Direction of Distortion (up or down)"
 					:default direction))
@@ -1024,13 +1062,13 @@ let Y be the observed output
   (clim:with-output-centered (stream)
     (clim:with-text-style (stream '(:fix :bold :large))
       (write-string "Controller Corruptors" stream)))
-  (terpri stream) 
+  (terpri stream)
   (terpri stream)
   (let* ((current-distorter (controller-hacker frame)))
     (setf (first current-distorter)
       (clim:accept `(clim:member-alist (("None" . nil) ("KP" . KP) ("KI" . KI) ("KD" . KD)))
 		   :stream stream
-		   :view clim:+textual-view+
+		   :view #-mcclim clim:+textual-view+ #+mcclim clim:+option-pane-view+
 		   :prompt "Controller Parameter "
 		   :default (first current-distorter)))
     (when (first current-distorter)
@@ -1054,19 +1092,20 @@ let Y be the observed output
   ;; Note that you need to arrange to kill this process after
   ;; the editor-dies.  That's in the frame-exit method below
   (let ((*package* (find-package (string-upcase "awdrat")))
-	(*debugger-hook* #'debugger-hook))
+	(*debugger-hook* #+(and clim allegro) #'debugger-hook #-(and clim allegro) nil))
     (APPLY #'clim:default-frame-top-level
 	   frame
 	   :prompt ">"
 	   OPTIONS)))
 
+#-mcclim
 (defun debugger-hook (condition hook)
   (declare (ignore hook))
   (let* ((*application-frame* *control-system-frame*)
 	 (*error-output* (clim:frame-standard-output *application-frame*))
 	 (stream (clim:get-frame-pane *application-frame* 'interactor)))
     (clim:stream-close-text-output-record stream)
-    (clim-utils:letf-globally
+    (#-mcclim clim-utils:letf-globally #+mcclim clim-internals::letf
         (((clim:stream-current-output-record stream) (clim:stream-output-history stream))
 	 ((clim:stream-recording-p stream) t)
 	 ((clim:stream-drawing-p stream) t)
@@ -1074,6 +1113,7 @@ let Y be the observed output
       (setf (clim:command-menu-enabled 'clim-env:listener-restarts *application-frame*) t)
       (clim-env:enter-debugger condition stream :own-frame t ))))
 
+#-mcclim
 (defun run-control-system ()
   (mp:process-run-function
 	"Control System Analyzer"
@@ -1092,11 +1132,51 @@ let Y be the observed output
 	  (clim:run-frame-top-level *control-system-frame*))
     ))
 
+
+#+mcclim
+(defun run-control-system (&key
+                             (new-process t)
+                             (debugger t)
+                             (width 790)
+                             (height 550)
+                             port
+                             frame-manager
+                             (process-name "Control System Analyzer")
+                             (package :awdrat))
+  (let* ((plant (make-instance 'water-tank-plant-model))
+           (controller (make-instance 'pid-controller))
+           (fm (or frame-manager (clim:find-frame-manager :port (or port (clim:find-port)))))
+           (frame (clim:make-application-frame 'control-system
+                                               :pretty-name "control system analyzer"
+                                               :frame-manager fm
+                                               :plant plant
+                                               :controller controller
+                                               :width width
+                                               :height height)))
+      (setq *control-system-frame* frame)
+      (setf (simulation-frame plant) *control-system-frame*)
+      (flet ((run ()
+               (let ((*package* (find-package package)))
+                 (unwind-protect
+                      (if debugger
+                          (clim-debugger:with-debugger () (clim:run-frame-top-level frame))
+                          (clim:run-frame-top-level frame))
+                   (clim:disown-frame fm frame)))))
+        (if new-process
+            (values (clim-sys:make-process #'run :name process-name)
+                    frame)
+            (run)))))
+#-mcclim
 (CLIM-env::define-lisp-listener-command (com-start-control-system :name t)
     ()
   (run-control-system))
 
-(define-condition observed-sensor-value-seems-wrong (error) 
+#+mcclim
+(clim-listener::define-listener-command  (com-start-control-system :name t)
+    ()
+  (run-control-system))
+
+(define-condition observed-sensor-value-seems-wrong (error)
   ((simulated-time :accessor simulated-time :initarg :simulated-time)
    (predicted-value :accessor predicted-value :initarg :predicted-value)
    (sensor-value :accessor sensor-value :initarg :sensor-value)
@@ -1106,11 +1186,11 @@ let Y be the observed output
 		     (sensor-value self)
 		     (predicted-value self)
 		     (simulated-time self)))))
-  
+
 (defmethod simulate ((frame control-system))
   (with-slots (plant controller simulation-time delta-time signal-distorter signal-names plant-output-name plot-data awdrat-enabled? display-enabled?) frame
     (save-pid controller)
-    (unwind-protect 
+    (unwind-protect
 	(setq plot-data
 	  (do-a-simulation plant controller
 			   simulation-time delta-time

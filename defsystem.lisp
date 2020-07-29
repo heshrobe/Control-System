@@ -57,17 +57,3 @@
    ("wrapping" (:module-class separate-destination-joshua-module))
    ("paper-simulation" (:module-class separate-destination-module))
    ))
-
-#+sbcl
-(asdf:defsystem controls
-  :pathname "."
-  :name "comtrols"
-  :description "Control System Simulator"
-  :maintainer "Howie Shrobe"
-  :serial t
-  :components ((:file "trace-format")
-               (:joshua-file"plot" )
-               (:joshua-file"kalman")
-               (:joshua-file"simulator" )
-               (:joshua-file "wrapping" )
-               (:joshua-file "paper-simulation")))

@@ -7,31 +7,31 @@
 
 (defun plot (values-arrays
 	     &key
-	     (colors (make-list (length values-arrays) :initial-element clim:+black+))
-	     parameter-names
-	     (label :None)
-	     ;; this is how much of a time-interval is represented by each
-	     ;; slot of the values-array
-	     (x-value-increment (/ 1.0 50.0))
-	     (x-scale 1)
-	     (y-scale 1)
-	     (left-margin 40)
-	     (x-grid-increment 10)
-	     (x-grid-increment-number-of-decimals 2)
-	     (y-grid-increment 10)
-	     (y-grid-increment-number-of-decimals 2)
-	     (stream *standard-output*)
-	     error-information
-	     )
+               (colors (make-list (length values-arrays) :initial-element clim:+black+))
+               parameter-names
+               (label :None)
+               ;; this is how much of a time-interval is represented by each
+               ;; slot of the values-array
+               (x-value-increment (/ 1.0 50.0))
+               (x-scale 1)
+               (y-scale 1)
+               (left-margin 40)
+               (x-grid-increment 10)
+               (x-grid-increment-number-of-decimals 2)
+               (y-grid-increment 10)
+               (y-grid-increment-number-of-decimals 2)
+               (stream *standard-output*)
+               error-information
+               )
   (let ((min-x 0)
 	(max-x (* (reduce #'max values-arrays :key #'length) x-value-increment))
 	(min-y nil)
-	(max-y nil))2
+	(max-y nil))
     (loop for array in values-arrays
-	for this-min = (if (= (length array) 0) 0 (reduce #'min array))
-	for this-max = (if (= (length array) 0) 0 (reduce #'max array))
-	when (or (null min-y) (< this-min min-y)) do (setq min-y this-min)
-	when (or (null max-y) (> this-max max-y)) do (setq max-y this-max))
+          for this-min = (if (= (length array) 0) 0 (reduce #'min array))
+          for this-max = (if (= (length array) 0) 0 (reduce #'max array))
+          when (or (null min-y) (< this-min min-y)) do (setq min-y this-min)
+            when (or (null max-y) (> this-max max-y)) do (setq max-y this-max))
     (fresh-line stream)
     (flet ((round-up (number divisor) (* divisor (ceiling number divisor)))
 	   (round-down (number divisor) (* divisor (floor number divisor))))
@@ -54,7 +54,7 @@
 			 stream)
 	      (when parameter-names
 		(draw-color-key stream (/ (+ top bottom) 2) right colors parameter-names))
-	      (when (and label (not (eql :none label)))
+              (when (and label (not (eql :none label)))
 		(draw-label label stream left bottom right line-height))
 	      (clim:draw-text* stream (format nil "Scale: ~5,2,,f" y-scale)
 			       left top
@@ -64,15 +64,15 @@
 			       right bottom
 			       :align-x :left :align-y :bottom
 			       :ink *grid-color*)
-	      ;; draw the plot
 	      (loop for array in values-arrays
-		  for color in colors
-		  do (draw-plot array stream x-value-increment color))
+                    for color in colors
+                    do (draw-plot array stream x-value-increment color))
+	      ;; draw the plot
 	      (when error-information
 		(highlight-error stream error-information x-value-increment)))
-	      ))))
-	  (terpri stream)
-	  (values)))
+            ))))
+    (terpri stream)
+    (values)))
 
 
 (defmethod highlight-error (stream error-information x-value-increment)
