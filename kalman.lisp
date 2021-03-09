@@ -49,7 +49,7 @@ Calculate the residual r: z(t) -  estimated-z(t)
 
 Calculate the kalman gain k(t):      h * prior-variance-estimate(t)
                                      ---------------------------
-                                   h^2 * prior-variance-estimate(t) + r(t)
+                                   h^2 * prior-variance-estimate(t) + R
 
 x-posterior-estimate(t) = x-prior-estimate(t) + k * (z(t) - h * x-prior-estimate(t))
 p-posterior-estimate(t) = p-prior-estimate * (1 - hk(t))
